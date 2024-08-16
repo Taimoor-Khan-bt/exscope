@@ -86,6 +86,11 @@ ExScope generates the following outputs:
 - **Read Counts Plot**: A PNG file visualizing read counts across the specified region.
 - **Read Counts Text File**: A text file listing read counts per position.
 
+  ![read_counts_plot](img/read_counts_plot.png)
+
+  ![read_counts_plot](img/read_counts_plot2.png)
+
+
 ## GFF3/GTF File Download
 
 If you don’t have a GFF3 or GTF file, you can download one for your species and genome build from:
