@@ -18,10 +18,15 @@ To install ExScope, follow these steps:
     cd exscope
     ```
 
-2. Install the package with `pip`:
+2. Install exscope as module with `pip`:
 
     ```bash
     pip install .
+    ```
+3. Install exscope as command-line tool with `pip`:
+
+    ```bash
+    pip install -e .
     ```
 
 This will automatically install all dependencies specified in the `setup.py` file.
