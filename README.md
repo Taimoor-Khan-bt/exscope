@@ -1,10 +1,10 @@
 # ExScope - Visualizing Read Counts at Genomic Regions
 
-ExScope is a Python-based bioinformatics tool that enables users to visualize read counts at specific genomic regions and Ensembl transcript IDs. It normalizes the read counts and generates plots. This tool is handy for identifying copy number variations (CNVs) and analyzing gene expression of a specific region on chromosome.
+ExScope is a Python-based bioinformatics tool that enables users to visualize read counts at specific genomic regions and Ensembl transcript IDs. It counts raw reads at the user-specified region and generates plots. This tool is handy for identifying copy number variations (CNVs) and analyzing gene expression of a specific region on a chromosome.
 
 ## Features
 - **Read Count Visualization**: Generates plots showing read counts across specified genomic regions.
-- **Normalization**: Normalizes read counts for accurate comparisons.
+- **Normalization**: Normalizes read counts for accurate comparisons (not added).
 - **Ensembl Transcript ID Support**: Allows focused analysis on specific Ensembl transcript IDs.
 
 ## Installation
