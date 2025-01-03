@@ -5,9 +5,10 @@ import numpy as np
 import os
 import logging
 import argparse
-from concurrent.futures import ThreadPoolExecutor
+from tqdm import tqdm
 
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Extract read counts from a BAM file in a specific genomic region.")
@@ -19,47 +20,51 @@ def parse_arguments():
     parser.add_argument('--plot_file', default="read_counts_plot.png", help="Name of the output plot file (default: read_counts_plot.png)")
     return parser.parse_args()
 
+def create_output_directory(output_dir):
+    """Create the output directory if it doesn't exist."""
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        logging.info(f"Created output directory: {output_dir}")
+
 def read_gff3(gff3_file, region, transcript_id):
-    """Read GFF3 file and extract exons from the specified transcript within a given region."""
+    """Read and filter the GFF3 file for the specified transcript ID and region."""
     chrom, positions = region.split(":")
     start, end = map(int, positions.split("-"))
 
+    logging.info(f"Reading GFF3 file: {gff3_file}")
     try:
-        # Read GFF3 file efficiently with chunking
         gff_df = pd.read_csv(gff3_file, sep="\t", comment='#', header=None,
                              names=["seqname", "source", "feature", "start", "end", "score", "strand", "phase", "attributes"])
+        logging.info(f"Loaded GFF3 file with {gff_df.shape[0]} rows")
 
-        # Filter for exons in the specified region
+        # Standardize chromosome names
+        chrom = chrom.replace("chr", "")
+        gff_df["seqname"] = gff_df["seqname"].str.replace("chr", "")
+
+        # Filter for overlapping exons
+        logging.info("Filtering for overlapping exons in the specified region...")
         exons = gff_df[(gff_df["seqname"] == chrom) &
-                       (gff_df["feature"] == "exon") &
-                       (gff_df["start"] >= start) &
-                       (gff_df["end"] <= end)]
+                       (gff_df["end"] >= start) &
+                       (gff_df["start"] <= end) &
+                       (gff_df["feature"] == "exon")]
 
-        if exons.empty:
-            logging.warning(f"No exons found in the specified region: {region}")
-            return pd.DataFrame()
-
-        # Parse attributes to get the transcript_id
+        # Parse transcript ID
         def get_transcript_id(attributes):
-            """Extract transcript_id from the attributes column."""
             for attr in attributes.split(";"):
                 if attr.startswith("transcript_id="):
                     return attr.split("=")[1].strip('"')
             return None
 
-        # Use .loc[] to avoid SettingWithCopyWarning
-        exons.loc[:, "transcript_id"] = exons["attributes"].apply(get_transcript_id)
+        exons["transcript_id"] = exons["attributes"].apply(get_transcript_id)
+        exons_filtered = exons[exons["transcript_id"] == transcript_id]
 
-        # Filter for the specified transcript_id
-        exons = exons[exons["transcript_id"] == transcript_id]
-        
-        if exons.empty:
+        if exons_filtered.empty:
             logging.warning(f"No exons found for transcript ID: {transcript_id}")
         else:
-            logging.info(f"Selected transcript: {transcript_id} ({len(exons)} exons)")
+            logging.info(f"Selected transcript: {transcript_id} ({len(exons_filtered)} exons)")
 
-        return exons
-    
+        return exons_filtered
+
     except Exception as e:
         logging.error(f"Error reading GFF3 file: {e}")
         return pd.DataFrame()
@@ -69,6 +74,7 @@ def extract_read_counts(bam_file, region):
     chrom, positions = region.split(":")
     start, end = map(int, positions.split("-"))
     
+    logging.info(f"Extracting read counts from BAM file: {bam_file} for region {region}")
     try:
         with pysam.AlignmentFile(bam_file, "rb") as bam:
             # Collect read counts per base in the region
@@ -77,168 +83,127 @@ def extract_read_counts(bam_file, region):
                 if start <= pileupcolumn.pos <= end:
                     read_counts[pileupcolumn.pos - start] = pileupcolumn.n
     except Exception as e:
-        logging.error(f"Error opening BAM file: {e}")
-        return None, chrom, start, end
-    
-    # Log1p transformation and normalization
-    read_counts = np.log1p(read_counts)
-    min_read, max_read = np.min(read_counts), np.max(read_counts)
-    read_counts = 4 * (read_counts - min_read) / (max_read - min_read) - 2
-    
+        logging.error(f"Error extracting read counts: {e}")
+        return np.zeros(end - start + 1, dtype=int), chrom, start, end
+
     return read_counts, chrom, start, end
 
-def write_read_counts_to_file(read_counts, exons, output_file, chrom, start):
+def write_read_counts_to_file(read_counts, exons_filtered, output_file, chrom, start):
     """Write read counts to a file, grouped by exons if available."""
+    logging.info(f"Writing read counts to file: {output_file}")
     with open(output_file, 'w') as f:
         f.write("Position\tReadCount\tExon\n")
-        for i, count in enumerate(read_counts):
+        for i, count in tqdm(enumerate(read_counts), desc="Writing read counts to file", total=len(read_counts)):
             position = start + i
-            exon = exons[(exons["start"] <= position) & (exons["end"] >= position)]
-            exon_label = exon["attributes"].iloc[0] if not exon.empty else "N/A"
-            f.write(f"{chrom}:{position}\t{count:.3f}\t{exon_label}\n")
+            exon = exons_filtered[(exons_filtered["start"] <= position) & (exons_filtered["end"] >= position)]
+            try:
+                exon_label = exon["attributes"].iloc[0] if not exon.empty else "N/A"
+            except Exception as e:
+                logging.error(f"Error extracting exon label: {e}")
+                exon_label = "N/A"
+            f.write(f"{position}\t{count}\t{exon_label}\n")
 
-    logging.info(f"Read counts written to {output_file}")
+    logging.info(f"Read counts successfully written to {output_file}")
 
-def merge_adjacent_exons(exon_list):
+def normalize_read_counts(read_counts):
     """
-    Merge adjacent exons with the same status (Dup/Del) into a range (e.g., Exon 1-10: Dup).
+    Log1p transform and normalize read counts to the range -2 to +2.
     """
-    merged = []
-    start, end, status = exon_list[0]
+    # Log1p transformation
+    logging.info("Log1p transformation applied.")
+    read_counts = np.log1p(read_counts)
 
-    for i in range(1, len(exon_list)):
-        curr_start, curr_end, curr_status = exon_list[i]
-        if curr_status == status and curr_start == end + 1:
-            # Merge adjacent exons
-            end = curr_end
-        else:
-            # Save the previous range and start a new one
-            if start == end:
-                merged.append(f"Exon {start}: {status}")
-            else:
-                merged.append(f"Exon {start}-{end}: {status}")
-            start, end, status = curr_start, curr_end, curr_status
+    # Clip outliers and normalize
+    percentile_5 = np.percentile(read_counts, 5)
+    percentile_95 = np.percentile(read_counts, 95)
+    read_counts = np.clip(read_counts, percentile_5, percentile_95)
+    min_read, max_read = np.nanmin(read_counts), np.nanmax(read_counts)
+    read_counts = 4 * (read_counts - min_read) / (max_read - min_read) - 2
+    logging.info("Data normalized to the range -2 to +2.")
 
-    # Add the last exon or range
-    if start == end:
-        merged.append(f"Exon {start}: {status}")
-    else:
-        merged.append(f"Exon {start}-{end}: {status}")
+    # Handle NaN values
+    read_counts = np.nan_to_num(read_counts, nan=0)  # Replace NaNs with -2 (or any other appropriate value)
+    
+    return read_counts
 
-    return merged
-
-def plot_stacked_area_read_counts(read_counts, positions, exon_regions=None, output_plot=None):
+def plot_stacked_area(read_counts, positions, exon_regions=None, ax=None):
     """
-    Create a high-quality stacked area plot where each exon has a different colored peak.
-    Highlights regions where log1p read counts indicate duplications or deletions.
-    Annotates those regions with exon numbers, and adjusts positions to avoid overlaps.
-    Widen the main plot and reduce legend text size for better clarity.
+    Create a stacked area plot for genomic data.
+    Highlights duplication (red), deletion (blue), and exons with unique colors.
     """
-    # Increase the figure size to make the plot wider and more readable
-    fig, ax = plt.subplots(figsize=(18, 7))  # Increased width for better visibility
+    if exon_regions is None:
+        exon_regions = []
 
-    # Convert positions to a NumPy array
+    if ax is None:
+        fig, ax = plt.subplots(figsize=(20, 8))
+
+    # Ensure positions is a NumPy array
     positions = np.array(positions)
 
-    # Plot each exon and highlight duplications/deletions
+    # Initialize cumulative counts
     cumulative_read_counts = np.zeros_like(read_counts)
-    exon_annotations = []
-    exon_labels = []
-    annotation_offsets = {}
 
-    # Track deleted/duplicated exons for merging adjacent ones
-    exon_statuses = []
+    # Define a colormap for exons
+    colors = plt.cm.tab20.colors  # A colormap with 20 distinct colors
 
-    # Iterate over exon regions and plot
+    # Plot exons with unique colors
     for exon_num, (exon_start, exon_end) in enumerate(exon_regions, 1):
         exon_mask = (positions >= exon_start) & (positions <= exon_end)
         exon_read_counts = read_counts[exon_mask]
-        is_duplication = False
-        is_deletion = False
-        
-        # Highlight duplications
-        duplication_mask = exon_read_counts >= 1.8
-        if np.any(duplication_mask):
-            ax.fill_between(positions[exon_mask][duplication_mask], cumulative_read_counts[exon_mask][duplication_mask], 
-                            cumulative_read_counts[exon_mask][duplication_mask] + exon_read_counts[duplication_mask], 
-                            color='red', alpha=0.5)
-            is_duplication = True
-            logging.info(f"Duplicated region detected: Exon {exon_num} ({exon_start}-{exon_end})")
 
-        # Highlight deletions
-        deletion_mask = exon_read_counts <= -1.5
-        if np.any(deletion_mask):
-            ax.fill_between(positions[exon_mask][deletion_mask], cumulative_read_counts[exon_mask][deletion_mask], 
-                            cumulative_read_counts[exon_mask][deletion_mask] + exon_read_counts[deletion_mask], 
-                            color='blue', alpha=0.5)
-            is_deletion = True
-            logging.info(f"Deleted region detected: Exon {exon_num} ({exon_start}-{exon_end})")
-
-        # Add exon status to the list for merging adjacent ones
-        if is_duplication:
-            exon_statuses.append((exon_num, exon_num, 'Dup'))
-        elif is_deletion:
-            exon_statuses.append((exon_num, exon_num, 'Del'))
-
-        # Stack regular exon read counts
-        ax.fill_between(positions[exon_mask], cumulative_read_counts[exon_mask], 
-                        cumulative_read_counts[exon_mask] + exon_read_counts, color='green', alpha=0.3)
+        ax.fill_between(
+            positions[exon_mask],
+            cumulative_read_counts[exon_mask],
+            cumulative_read_counts[exon_mask] + exon_read_counts,
+            color=colors[exon_num % len(colors)],
+            alpha=0.8,  # Increased opacity for better visibility
+            linewidth=2,  # Thicker border around the filled areas
+            label=f"Exon {exon_num}"
+        )
         cumulative_read_counts[exon_mask] += exon_read_counts
 
-        # Store exon label for the legend
-        exon_labels.append(f"Exon {exon_num}")  # Shortened label for clarity
+    # Aesthetics
+    ax.set_xlabel('Genomic Position', fontsize=14)
+    ax.set_ylabel('Normalized Log1p Transformed Read Counts', fontsize=14)
+    ax.set_title('Stacked Area Plot of Read Counts', fontsize=16)
+    ax.set_xticks(np.linspace(min(positions), max(positions), num=8))
+    ax.set_xticklabels([f"{int(x):,}" for x in np.linspace(min(positions), max(positions), num=8)],
+                       rotation=45, ha='right', fontsize=10)
+    ax.grid(True, linestyle='--', alpha=0.5)
 
-    # Merge adjacent duplicated/deleted exons and prepare for legend
-    if exon_statuses:
-        exon_annotations.extend(merge_adjacent_exons(exon_statuses))
+    # Add legend outside the plot
+    ax.legend(loc='center left', bbox_to_anchor=(1, 0.5), fontsize=10, title="Exon Regions", ncol=1)
 
-    # Set axis labels and title with appropriate fontsize
-    ax.set_xlabel('Genomic Position', fontsize=16)
-    ax.set_ylabel('Log1p Transformed Read Counts', fontsize=16)
-    plt.title(f"Read Count Plot", fontsize=18)
+    return ax
 
-    # Customize x-axis labels for readability
-    ax.set_xticks(np.linspace(min(positions), max(positions), num=6))
-    ax.set_xticklabels([f"{int(x):,}" for x in np.linspace(min(positions), max(positions), num=6)], rotation=0, ha="right", fontsize=12)
+def plot_stacked_area_read_counts(read_counts, positions, exon_regions=None, output_plot=None):
+    """
+    Generate a stacked area plot for the genomic data.
+    """
+    # Normalize read counts
+    read_counts = normalize_read_counts(read_counts)
 
-    # Add gridlines for better readability
-    ax.grid(True, linestyle='--', alpha=0.6)
+    # Create subplots
+    fig, ax = plt.subplots(figsize=(20, 8))
 
-    # Build custom legend with smaller font size for clarity
-    handles, labels = ax.get_legend_handles_labels()
+    # Generate stacked area plot
+    plot_stacked_area(read_counts, positions, exon_regions=exon_regions, ax=ax)
 
-    # Add exon annotations for duplication and deletion regions
-    if exon_annotations:
-        for annotation in exon_annotations:
-            handles.append(plt.Line2D([0], [0], color='black', lw=4, alpha=0.5))
-            labels.append(annotation)
+    # Adjust layout to fit the legend
+    plt.tight_layout(rect=[0, 0, 0.85, 1])  # Leave space for the legend
 
-    # Add normal exon regions to the legend
-    for label in exon_labels:
-        handles.append(plt.Line2D([0], [0], color='green', lw=4, alpha=0.3))
-        labels.append(label)
-
-    # Adjust the number of legend columns dynamically based on the number of exons
-    ncol = max(1, min(len(exon_labels) // 10 + 1, 5))  # Max 5 columns, adjust based on the number of exons
-    ax.legend(handles, labels, loc="upper left", bbox_to_anchor=(1, 1), fontsize=8, ncol=ncol)  # Reduced fontsize to 8 for better clarity
-
-    # Adjust layout to prevent clipping of labels
-    fig.tight_layout(rect=[0, 0, 0.85, 1])  # Adjust right side to make space for the legend
-
-    # Save or show plot with a high-quality DPI setting
+    # Save or show the plot
     if output_plot:
-        plt.savefig(output_plot, bbox_inches='tight', dpi=300)  # Set DPI to 300 for high-quality output
+        plt.savefig(output_plot, dpi=300, bbox_inches='tight')
         logging.info(f"Plot saved to {output_plot}")
     else:
         plt.show()
 
-def create_output_directory(output_dir):
-    """Create the output directory if it doesn't exist."""
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-        logging.info(f"Created output directory: {output_dir}")
-
 def main():
+    """
+    Main function to parse arguments, create output directory, extract exons and read counts,
+    write read counts to a file, and generate a plot.
+    """
     # Parse arguments
     args = parse_arguments()
     
@@ -248,14 +213,14 @@ def main():
     # Extract exons from GFF3 file
     exons = read_gff3(args.gff3, args.region, args.transcript_id)
     
-    if exons.empty:
+    if exons is None or exons.empty:
         logging.error("No exons found. Exiting.")
         return
     
     # Extract read counts
     read_counts, chrom, start, end = extract_read_counts(args.bam, args.region)
     
-    if read_counts is None:
+    if read_counts is None or len(read_counts) == 0:
         logging.error("No read counts extracted. Exiting.")
         return
     

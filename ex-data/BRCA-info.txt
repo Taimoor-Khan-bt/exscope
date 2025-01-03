@@ -1,0 +1,4 @@
+Gene: BRCA 1
+Coodinates: chr17:43044295-43170245
+transcript: ENST00000357654.9
+
