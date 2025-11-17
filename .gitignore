@@ -221,3 +221,15 @@ gencode_v38_annotation.gff3
 gencode_v38_annotation.gff3.db
 read_counts.txt
 xgen-exome-hyb-panel-v2-targets-hg38.bed
+
+# Test outputs and temporary files
+test_*.png
+test_*.bed
+test_*/
+*_coverage.*
+*.mosdepth.*
+*.csi
+test_batch_output/
+test_output*/
+final_test*.png
+README.md.backup
