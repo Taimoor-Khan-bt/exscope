@@ -6,3 +6,5 @@ gffutils
 tqdm
 scikit-learn
 seaborn
+plotly>=5.0.0
+kaleido

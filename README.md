@@ -162,6 +162,106 @@ exscope chromosome <BAM_FILE> <ANNOTATION_FILE> -c <CHROMOSOME> -o <OUTPUT_FILE>
 exscope chromosome sample.bam targets.bed -c chr17 -o chr17_coverage.png
 ```
 
+### 4. Chromosome-Level Coverage Analysis (NEW)
+
+Analyze coverage across all chromosomes to detect deletions and chromosomal abnormalities:
+
+```bash
+exscope chromosome-coverage <BAM_FILE> -d <OUTPUT_DIR>
+```
+
+**Required Arguments:**
+- `BAM_FILE`: Input BAM/CRAM file (single sample mode)
+- `-d, --output-dir`: Output directory for results
+
+**Optional Arguments:**
+- `--bams`: Multiple BAM files for comparison (e.g., `--bams sample1.bam sample2.bam`)
+- `--bams-file`: File containing BAM paths (one per line)
+- `--reference`: Reference genome FASTA (required for CRAM files)
+- `--threads`: Number of threads (default: 1, max: 2 to prevent system overload)
+- `--dpi`: Image resolution for plots (default: 300 for publication quality)
+- `--export-format`: Output format(s): `html`, `png`, `pdf`, `svg` (default: `html`)
+- `--width`: Plot width in pixels (default: 1400)
+- `--height`: Plot height in pixels (default: 800)
+
+**Output Files:**
+- `<sample>_chromosome_tracks.html`: Genome browser-style visualization showing actual sequenced regions
+- `<sample>_chromosome_coverage.html`: Interactive bar chart with hover tooltips
+- `<sample>_chromosome_report.html`: Comprehensive report with multiple views
+- `<sample>_chromosome_report.txt`: Human-readable text report with ASCII bars
+- `<sample>_chromosome_summary.tsv`: Tab-delimited coverage statistics
+- `<sample>_covered_regions.tsv`: Genomic coordinates of all covered regions
+- `chromosome_comparison.html`: Multi-sample comparison (when multiple BAMs provided)
+- `chromosome_heatmap.html`: Coverage heatmap across samples
+
+**Single Sample Example:**
+```bash
+exscope chromosome-coverage patient.bam -d chr_analysis/
+```
+
+**Publication-Ready Figures (High-Resolution PDF/PNG):**
+```bash
+# Generate PNG and PDF at 300 DPI for publications
+exscope chromosome-coverage patient.bam -d figures/ \
+  --export-format png pdf \
+  --dpi 300 \
+  --width 1600 \
+  --height 900
+
+# Output: *.png and *.pdf publication-ready figures
+```
+
+**Multi-Sample Comparison:**
+```bash
+exscope chromosome-coverage --bams normal.bam patient.bam -d comparison/
+```
+
+**Interactive HTML (for exploration):**
+```bash
+# Default: generates interactive HTML plots
+exscope chromosome-coverage patient.bam -d results/ --export-format html
+```
+
+**Use Case: Y Chromosome Deletion Detection**
+
+ExScope automatically detects Y chromosome deletions in WES data:
+
+```bash
+exscope chromosome-coverage sample.bam -d y_deletion_check/
+```
+
+The tool will:
+1. Calculate coverage for all chromosomes (chr1-22, X, Y, MT) using pileup analysis
+2. Track actual genomic regions with coverage (merged within 1000bp gaps)
+3. Normalize coverage to autosomal mean
+4. Flag chromosomes with <15% expected coverage as deleted
+5. Infer sex chromosome karyotype (XX, XY, X0, XXY, XYY, XXX)
+6. Generate genome browser-style visualizations showing covered vs uncovered regions
+7. Create interactive plots and detailed reports
+
+**Visualization Features:**
+- **Chromosome Track Plot**: Shows all 25 chromosomes as horizontal bars with actual covered regions highlighted
+- **Small Region Enhancement**: Regions <0.2% of chromosome length shown with diamond markers for visibility
+- **Color Coding**: Normal (green), Reduced (orange), Deleted (red), Elevated (blue), Partial (purple), Not Sequenced (gray)
+- **Interactive HTML**: Hover tooltips showing exact coverage values and genomic coordinates
+
+**Karyotype Inference:**
+ExScope automatically infers karyotype from sex chromosome coverage ratios:
+- **XX** (Normal female): chrX ratio ~1.0, chrY ratio <0.15
+- **XY** (Normal male): chrX ratio ~0.5, chrY ratio ~0.5
+- **X0** (Turner syndrome): chrX ratio ~0.5, chrY ratio <0.15
+- **XXY** (Klinefelter): chrX ratio ~1.0, chrY ratio ~0.5
+- **XYY** syndrome: chrX ratio ~0.5, chrY ratio ~1.0
+- **XXX** (Triple X): chrX ratio ~1.0, chrY ratio <0.15
+- **Unknown**: When ratios don't match expected patterns (e.g., targeted sequencing without X/Y coverage)
+
+**Interpretation:**
+- **Normal ratio** (~1.0 for autosomes): Chromosome present with expected copy number
+- **Reduced ratio** (0.4-0.6 for X/Y in males): Expected for sex chromosomes  
+- **Deleted** (<0.15): Chromosome likely absent or severely underrepresented
+- **Elevated** (>1.45): Possible duplication or trisomy
+- **Partially Sequenced** (<50% coverage): Targeted sequencing (e.g., exome) with incomplete chromosome coverage
+
 ### Global Options
 
 Available for all subcommands:
@@ -304,6 +404,20 @@ If you use ExScope in your research, please cite:
 - **Email**: taimoorkhan@scichores.com
 - **GitHub**: [https://github.com/Taimoor-Khan-bt/exscope](https://github.com/Taimoor-Khan-bt/exscope)
 
-## Version
+## Version History
 
-Current version: **1.0.0**
+- **1.1.0** (2024-11-18):
+  - Added chromosome coverage analysis with region tracking
+  - Genome browser-style chromosome track visualization
+  - Karyotype inference (XX, XY, X0, XXY, XYY, XXX)
+  - Publication-ready exports (PNG, PDF, SVG at 300+ DPI)
+  - Small region visibility enhancement with diamond markers
+  - Covered regions output (genomic coordinates)
+  - Partially sequenced chromosome detection
+
+- **1.0.0** (2024-11-17):
+  - Initial release
+  - Single gene, batch, and chromosome visualization modes
+  - Integration with mosdepth, samtools, pyGenomeTracks
+
+Current version: **1.1.0**

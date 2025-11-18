@@ -5,6 +5,80 @@ All notable changes to ExScope will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2025-11-18
+
+### Added
+- **Chromosome-level coverage analysis** (`exscope chromosome-coverage`):
+  - Detect chromosome deletions and aneuploidies from WES/WGS data
+  - Automatic Y chromosome deletion detection for clinical diagnostics
+  - Sex chromosome karyotype inference (XX, XY, X0, XXY, XYY, XXX, Unknown)
+  - Normalized coverage ratio calculation relative to autosomal mean
+  - Classification system: Normal, Reduced, Deleted, Elevated, Partially Sequenced, Not Sequenced
+  - Accurate position-level coverage tracking using pysam.pileup()
+  - Covered regions output with genomic coordinates (merged within 1000bp gaps)
+  - Partial chromosome sequencing detection (<50% coverage)
+
+- **Genome browser-style chromosome track visualization**:
+  - Shows all 25 chromosomes (chr1-22, X, Y, MT) as horizontal bars
+  - Fills covered regions with color coding by status
+  - Small region enhancement: diamond markers + rectangles for regions <0.2% of chromosome length
+  - Fixed label overlap issue using y-axis tick labels with proper margins
+  - Interactive hover tooltips showing exact coverage and coordinates
+
+- **Publication-ready export formats**:
+  - `--export-format` flag supporting: html, png, pdf, svg
+  - `--dpi` option for high-resolution figures (default: 300 for publications)
+  - `--width` and `--height` for custom plot dimensions
+  - PDF vector graphics for scalable, editable figures
+  - SVG format for further customization in graphics software
+
+- **Interactive Plotly visualizations**:
+  - Chromosome track plot (genome browser style) showing actual sequenced regions
+  - Color-coded bar charts (green=normal, orange=reduced, red=deleted, blue=elevated, purple=partial, gray=not sequenced)
+  - Hover tooltips with detailed coverage statistics
+  - Multi-sample comparison plots
+  - Coverage heatmaps for batch analysis
+  - Comprehensive report plots with multiple views
+
+- **Comprehensive reporting**:
+  - HTML interactive plots for exploration
+  - PNG/PDF/SVG high-resolution static images for publications
+  - Text reports with ASCII bar charts
+  - TSV summary tables for downstream analysis
+  - Covered regions TSV with genomic coordinates
+  - Automatic interpretation of findings with clinical relevance
+
+- **Multi-sample support**:
+  - Side-by-side comparison of multiple BAM files
+  - Batch analysis with parallel processing
+  - Comparison tables across samples
+
+- **New dependencies**: 
+  - plotly >= 5.14.0 (interactive visualizations)
+  - kaleido >= 0.2.0 (static image export)
+  - pysam >= 0.22.0 (position-level coverage tracking)
+
+### Changed
+- Updated CLI with new `chromosome-coverage` subcommand
+- Enhanced documentation with chromosome analysis examples and karyotype interpretation
+- Added comprehensive example script: `examples/chromosome_coverage_example.py`
+- Improved thread limiting (default: 1, max: 2) to prevent system overload during pileup
+- Updated README with version 1.1.0 features and publication export guidelines
+
+### Fixed
+- Chromosome label overlap in track visualization (changed from floating annotations to y-axis ticks)
+- Small covered regions (<0.2% of chromosome) now visible with diamond markers
+- Proper detection of partially sequenced chromosomes (e.g., exome data)
+
+### Performance
+- Fast position-level coverage calculation using pysam.pileup()
+- Region merging with 1000bp gap tolerance for efficient storage
+- Efficient analysis of multiple samples in parallel
+- Typical runtime: ~10-20 seconds per sample for full chromosome analysis
+
+### Removed
+- Outdated example files: `functionality_test.py`, `simple_visualization.py`
+
 ## [1.0.0] - 2024-11-18
 
 ### Major Refactor
