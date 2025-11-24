@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="exscope",
-    version="0.3.0",
+    version="1.2.1",
     description="A genomics visualization and analysis tool integrating established bioinformatics tools.",
     author="Taimoor Khan",
     author_email="taimoorkhan@scichores.com",
@@ -17,6 +17,8 @@ setup(
         "tqdm>=4.65.0",
         
         # Visualization dependencies
+        "plotly>=5.14.0",
+        "kaleido>=0.2.0",
         "pygenometracks>=3.7",
         "pybedtools>=0.9.0"
     ],

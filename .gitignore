@@ -226,7 +226,6 @@ xgen-exome-hyb-panel-v2-targets-hg38.bed
 test_*.png
 test_*.bed
 test_*/
-*_coverage.*
 *.mosdepth.*
 *.csi
 test_batch_output/

@@ -33,6 +33,16 @@ class ChromosomePlotter:
         ChromosomeStatus.NOT_SEQUENCED: '#95a5a6'    # Gray - Not in BAM
     }
     
+    # Expected WES coverage per chromosome (approximate % of chromosome covered by exons)
+    # Based on RefSeq exon coverage for hg38
+    EXPECTED_WES_COVERAGE = {
+        'chr1': 2.1, 'chr2': 2.0, 'chr3': 1.9, 'chr4': 1.5, 'chr5': 1.8,
+        'chr6': 1.9, 'chr7': 2.0, 'chr8': 1.7, 'chr9': 2.0, 'chr10': 1.8,
+        'chr11': 2.3, 'chr12': 2.1, 'chr13': 1.2, 'chr14': 1.5, 'chr15': 1.6,
+        'chr16': 2.2, 'chr17': 2.8, 'chr18': 1.3, 'chr19': 3.1, 'chr20': 2.0,
+        'chr21': 1.4, 'chr22': 2.5, 'chrX': 1.6, 'chrY': 0.5, 'chrM': 100.0
+    }
+    
     def __init__(self, width: int = 1200, height: int = 600, dpi: int = 100):
         """Initialize ChromosomePlotter.
         
@@ -45,22 +55,55 @@ class ChromosomePlotter:
         self.height = height
         self.dpi = dpi
     
+    @staticmethod
+    def _transform_coverage_for_visibility(percent_covered: float, method: str = 'log') -> float:
+        """Transform coverage percentage for better visibility of small values.
+        
+        Args:
+            percent_covered: Actual percentage of chromosome covered (0-100)
+            method: Transformation method ('log', 'sqrt', 'linear')
+            
+        Returns:
+            Transformed percentage for visualization (0-100)
+        """
+        if percent_covered <= 0:
+            return 0.0
+        
+        if method == 'log':
+            # Logarithmic scaling: makes small values visible while preserving ordering
+            # Formula: log10(1 + percent * scale) / log10(1 + 100 * scale) * 100
+            # Scale factor of 10 provides good visibility for 0.01% - 10% range
+            scale = 10
+            transformed = (np.log10(1 + percent_covered * scale) / 
+                          np.log10(1 + 100 * scale)) * 100
+            return transformed
+        
+        elif method == 'sqrt':
+            # Square root scaling: less aggressive than log
+            return np.sqrt(percent_covered) * 10
+        
+        else:  # linear
+            return percent_covered
+    
     def plot_chromosome_tracks(self, result: ChromosomeAnalysisResult,
                               output: Optional[str] = None,
-                              show_plot: bool = False) -> go.Figure:
-        """Create chromosome ideogram-style tracks showing covered regions.
+                              show_plot: bool = False,
+                              transformation: str = 'log') -> go.Figure:
+        """Create simplified chromosome coverage tracks with percentage-based fills.
         
         This visualization shows each chromosome as a horizontal bar where:
-        - Gray background = full chromosome length
-        - Colored filled regions = actual sequenced/covered areas
-        - Gaps = regions with no coverage
+        - Gray background = full chromosome (100%)
+        - Colored fill = percentage of chromosome covered (log-scaled for visibility)
+        - Vertical line = expected WES coverage for that chromosome
         
-        Perfect for WES/targeted sequencing to see which parts are covered.
+        Uses logarithmic transformation to make small coverages (even single genes) visible.
+        Perfect for WES/targeted sequencing to detect deletions and aneuploidies.
         
         Args:
             result: ChromosomeAnalysisResult to visualize
             output: Optional output file path (HTML or image)
             show_plot: Whether to display plot interactively
+            transformation: Transform method ('log', 'sqrt', 'linear') for visibility
             
         Returns:
             Plotly Figure object
@@ -72,82 +115,78 @@ class ChromosomePlotter:
         # Create figure
         fig = go.Figure()
         
+        # Prepare data arrays for efficient plotting
+        all_shapes = []  # Collect all shapes to add at once
+        
         # Add each chromosome as a track
         for idx, chrom in enumerate(reversed(sorted_chroms)):  # Reverse for top-to-bottom display
             cov = result.chromosomes[chrom]
             y_pos = idx
             
-            # Add full chromosome outline (gray background)
-            if cov.total_bases > 0:
-                fig.add_trace(go.Scatter(
-                    x=[0, cov.total_bases],
-                    y=[y_pos, y_pos],
-                    mode='lines',
-                    line=dict(color='#ecf0f1', width=20),
-                    showlegend=False,
-                    hoverinfo='skip'
+            # Get actual and transformed coverage percentages
+            actual_percent = cov.percent_covered
+            visual_percent = self._transform_coverage_for_visibility(actual_percent, transformation)
+            
+            # Get color based on status
+            color = self.COLORS.get(cov.status, '#95a5a6')
+            
+            # Add gray background (full chromosome = 100%)
+            all_shapes.append(dict(
+                type="rect",
+                x0=0, x1=100,
+                y0=y_pos - 0.4, y1=y_pos + 0.4,
+                fillcolor='#ecf0f1',
+                line=dict(color='#bdc3c7', width=1),
+                layer='below'
+            ))
+            
+            # Add colored fill for covered percentage (transformed for visibility)
+            if visual_percent > 0:
+                all_shapes.append(dict(
+                    type="rect",
+                    x0=0, x1=visual_percent,
+                    y0=y_pos - 0.4, y1=y_pos + 0.4,
+                    fillcolor=color,
+                    line=dict(color=color, width=0),
+                    opacity=0.8
                 ))
             
-            # Add covered regions as filled segments
-            if cov.covered_regions:
-                for start, end in cov.covered_regions:
-                    # Color based on status
-                    color = self.COLORS.get(cov.status, '#95a5a6')
-                    
-                    # Calculate region size for visualization enhancement
-                    region_size = end - start
-                    min_visible_size = cov.total_bases * 0.002  # 0.2% minimum visibility
-                    
-                    # For very small regions, use markers + thicker lines to make visible
-                    if region_size < min_visible_size:
-                        # Use rectangles (shapes) for better visibility of small regions
-                        fig.add_shape(
-                            type="rect",
-                            x0=start, x1=end,
-                            y0=y_pos - 0.3, y1=y_pos + 0.3,
-                            fillcolor=color,
-                            line=dict(color=color, width=2),
-                            opacity=0.9
-                        )
-                        # Add marker at center for hover
-                        center = (start + end) / 2
-                        fig.add_trace(go.Scatter(
-                            x=[center],
-                            y=[y_pos],
-                            mode='markers',
-                            marker=dict(
-                                size=8,
-                                color=color,
-                                symbol='diamond',
-                                line=dict(color='white', width=1)
-                            ),
-                            showlegend=False,
-                            hovertext=f"{chrom}: {start:,}-{end:,} ({region_size:,} bp)<br>"
-                                     f"Status: {cov.status.value}<br>"
-                                     f"Coverage: {cov.mean_coverage:.2f}x",
-                            hoverinfo='text'
-                        ))
-                    else:
-                        # Normal-sized regions - use thick lines
-                        fig.add_trace(go.Scatter(
-                            x=[start, end],
-                            y=[y_pos, y_pos],
-                            mode='lines',
-                            line=dict(color=color, width=20),
-                            showlegend=False,
-                            hovertext=f"{chrom}: {start:,}-{end:,} ({region_size:,} bp)<br>"
-                                     f"Status: {cov.status.value}<br>"
-                                     f"Coverage: {cov.mean_coverage:.2f}x",
-                            hoverinfo='text'
-                        ))
+            # Add expected WES coverage line for this chromosome
+            expected_cov = self.EXPECTED_WES_COVERAGE.get(chrom, 2.0)
+            expected_visual = self._transform_coverage_for_visibility(expected_cov, transformation)
+            all_shapes.append(dict(
+                type="line",
+                x0=expected_visual, x1=expected_visual,
+                y0=y_pos - 0.5, y1=y_pos + 0.5,
+                line=dict(color='rgba(0,0,0,0.3)', width=1, dash='dot')
+            ))
             
-            # Add chromosome label (will be positioned outside plot area using annotations)
+            # Add invisible scatter trace for hover information (one point per chromosome)
+            hover_text = (
+                f"<b>{chrom}</b><br>"
+                f"Actual coverage: {actual_percent:.3f}% of chromosome<br>"
+                f"Visual (log-scaled): {visual_percent:.1f}%<br>"
+                f"Expected WES: ~{expected_cov:.1f}%<br>"
+                f"Mean depth: {cov.mean_coverage:.2f}x<br>"
+                f"Status: {cov.status.value}<br>"
+                f"Covered bases: {cov.covered_bases:,} / {cov.total_bases:,} bp"
+            )
+            
+            fig.add_trace(go.Scatter(
+                x=[visual_percent / 2],  # Center of filled region
+                y=[y_pos],
+                mode='markers',
+                marker=dict(size=0.1, opacity=0),  # Invisible marker
+                hovertext=hover_text,
+                hoverinfo='text',
+                showlegend=False
+            ))
         
-        # Find the maximum chromosome length for consistent x-axis range
-        max_chrom_length = max(cov.total_bases for cov in result.chromosomes.values() if cov.total_bases > 0)
+        # Add all shapes at once (much faster than individual additions)
+        fig.update_layout(shapes=all_shapes)
         
-        # Add chromosome labels as y-axis tick labels instead of annotations
-        chrom_labels = [cov.chrom for cov in [result.chromosomes[c] for c in reversed(sorted_chroms)]]
+        # Add chromosome labels as y-axis tick labels
+        chrom_labels = [result.chromosomes[c].chrom for c in reversed(sorted_chroms)]
         
         # Count chromosomes by status for summary
         status_counts = {}
@@ -158,6 +197,13 @@ class ChromosomePlotter:
         # Create status summary for subtitle
         status_summary = " | ".join([f"{count} {status}" for status, count in sorted(status_counts.items())])
         
+        # Transformation note for subtitle
+        transform_note = {
+            'log': 'Log-scaled for visibility',
+            'sqrt': 'Square-root scaled for visibility',
+            'linear': 'Linear scale'
+        }.get(transformation, 'Transformed for visibility')
+        
         # Update layout with proper margins and axis settings
         fig.update_layout(
             title=dict(
@@ -165,16 +211,16 @@ class ChromosomePlotter:
                      f"<sub>Karyotype: {result.inferred_karyotype.value} | "
                      f"Autosomal mean: {result.autosomal_mean:.2f}x<br>"
                      f"{status_summary}<br>"
-                     f"<i>Note: Small covered regions shown as ◆ markers. Hover for details.</i></sub>",
+                     f"<i>{transform_note} | Dotted lines show expected WES coverage | Hover for actual percentages</i></sub>",
                 x=0.5,
                 xanchor='center'
             ),
             xaxis=dict(
-                title="Genomic Position (bp)",
+                title="Coverage (% of chromosome, transformed for visibility)",
                 showgrid=True,
                 gridcolor='#f0f0f0',
                 zeroline=False,
-                range=[0, max_chrom_length * 1.02]  # Add 2% padding
+                range=[0, 105]  # 0-100% with small padding
             ),
             yaxis=dict(
                 showticklabels=True,
@@ -190,7 +236,7 @@ class ChromosomePlotter:
             width=self.width,
             plot_bgcolor='white',
             hovermode='closest',
-            margin=dict(l=80, r=40, t=120, b=80)  # Left margin for chromosome labels
+            margin=dict(l=80, r=40, t=140, b=80)  # Left margin for chromosome labels
         )
         
         # Save if output specified

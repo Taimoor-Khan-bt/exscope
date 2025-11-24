@@ -249,20 +249,22 @@ def analyze_chromosome_coverage(args):
             generated_files = []
             
             for fmt in export_formats:
-                # Chromosome track visualization (shows actual covered regions)
+                # Always generate the optimized chromosome tracks (log-scaled for visibility)
                 track_path = output_dir / f"{result.sample_id}_chromosome_tracks.{fmt}"
                 plotter.plot_chromosome_tracks(result, output=str(track_path))
-                generated_files.append(('Chromosome tracks (region view)', track_path))
+                generated_files.append(('Chromosome tracks (optimized)', track_path))
                 
-                # Bar plot - traditional view
-                bar_path = output_dir / f"{result.sample_id}_chromosome_coverage.{fmt}"
-                plotter.plot_single_sample(result, output=str(bar_path))
-                generated_files.append(('Interactive plot (bar chart)', bar_path))
-                
-                # Comprehensive report plot
-                report_plot_path = output_dir / f"{result.sample_id}_chromosome_report.{fmt}"
-                plotter.create_report_plot(result, output=str(report_plot_path))
-                generated_files.append(('Report plot', report_plot_path))
+                # Generate additional plots only if --all-plots is specified
+                if args.all_plots:
+                    # Bar plot - traditional view (less useful for targeted sequencing)
+                    bar_path = output_dir / f"{result.sample_id}_chromosome_coverage.{fmt}"
+                    plotter.plot_single_sample(result, output=str(bar_path))
+                    generated_files.append(('Bar chart (traditional)', bar_path))
+                    
+                    # Comprehensive report plot (dual panel)
+                    report_plot_path = output_dir / f"{result.sample_id}_chromosome_report.{fmt}"
+                    plotter.create_report_plot(result, output=str(report_plot_path))
+                    generated_files.append(('Report (dual panel)', report_plot_path))
             
             print(f"\n✓ Chromosome analysis complete for {result.sample_id}")
             print(f"  Karyotype: {result.inferred_karyotype.value}")
@@ -482,6 +484,8 @@ Examples:
     bam_group.add_argument('--bams-file', help='File containing BAM file paths (one per line)')
     chr_cov_parser.add_argument('-d', '--output-dir', required=True, help='Output directory')
     chr_cov_parser.add_argument('--reference', help='Reference genome FASTA (for CRAM)')
+    chr_cov_parser.add_argument('--all-plots', action='store_true', 
+                               help='Generate all plot types (tracks, bar chart, and report). Default: tracks only')
     chr_cov_parser.add_argument('--dpi', type=int, default=300, help='Image resolution for publication (default: 300)')
     chr_cov_parser.add_argument('--threads', type=int, default=1, help='Number of threads (default: 1, max: 2)')
     chr_cov_parser.add_argument('--export-format', nargs='+', 
