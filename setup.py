@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="exscope",
-    version="1.2.1",
+    version="1.3.0",
     description="A genomics visualization and analysis tool integrating established bioinformatics tools.",
     author="Taimoor Khan",
     author_email="taimoorkhan@scichores.com",

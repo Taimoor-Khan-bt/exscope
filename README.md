@@ -162,9 +162,9 @@ exscope chromosome <BAM_FILE> <ANNOTATION_FILE> -c <CHROMOSOME> -o <OUTPUT_FILE>
 exscope chromosome sample.bam targets.bed -c chr17 -o chr17_coverage.png
 ```
 
-### 4. Chromosome-Level Coverage Analysis (NEW - Optimized!)
+### 4. Chromosome-Level Coverage Analysis for WES (Scientifically Validated!)
 
-Analyze coverage across all chromosomes to detect deletions and chromosomal abnormalities with **ultra-fast logarithmic visualization**:
+Analyze coverage across all chromosomes to detect deletions and chromosomal abnormalities using **normalized depth ratios** - the clinical standard for CNV detection:
 
 ```bash
 exscope chromosome-coverage <BAM_FILE> -d <OUTPUT_DIR>
@@ -174,11 +174,17 @@ exscope chromosome-coverage <BAM_FILE> -d <OUTPUT_DIR>
 - `BAM_FILE`: Input BAM/CRAM file (single sample mode)
 - `-d, --output-dir`: Output directory for results
 
-**Optional Arguments:**
+**Visualization Options:**
+- `--plot-type ratio`: **Normalized depth ratio** (DEFAULT, RECOMMENDED) - Shows chromosome depth / autosomal mean
+- `--plot-type clinical`: **Two-panel clinical report** - Ratio (top) + absolute depth (bottom) for comprehensive WES analysis
+- `--plot-type qc-breadth`: **Coverage breadth QC** - Actual % covered vs expected % for WES (data quality metric only)
+- `--plot-type legacy`: DEPRECATED log-scaled visualization (not clinically validated, backward compatibility only)
+- `--all-plots`: Generate all plot types (overrides --plot-type)
+
+**Other Arguments:**
 - `--bams`: Multiple BAM files for comparison (e.g., `--bams sample1.bam sample2.bam`)
 - `--bams-file`: File containing BAM paths (one per line)
 - `--reference`: Reference genome FASTA (required for CRAM files)
-- `--all-plots`: Generate all plot types (tracks, bar chart, report). **Default: tracks only**
 - `--threads`: Number of threads (default: 1, max: 2 to prevent system overload)
 - `--dpi`: Image resolution for plots (default: 300 for publication quality)
 - `--export-format`: Output format(s): `html`, `png`, `pdf`, `svg` (default: `html`)
@@ -186,47 +192,46 @@ exscope chromosome-coverage <BAM_FILE> -d <OUTPUT_DIR>
 - `--height`: Plot height in pixels (default: 800)
 
 **Output Files:**
-- `<sample>_chromosome_tracks.html`: **Optimized log-scaled visualization** (default output, 400x faster!)
-- `<sample>_chromosome_coverage.html`: Traditional bar chart (generated with `--all-plots`)
-- `<sample>_chromosome_report.html`: Dual-panel report (generated with `--all-plots`)
-- `<sample>_chromosome_report.txt`: Human-readable text report with ASCII bars
-- `<sample>_chromosome_summary.tsv`: Tab-delimited coverage statistics
+- `<sample>_normalized_ratio.html`: **Normalized depth ratio plot** (default, clinically validated)
+- `<sample>_clinical_report.html`: **Two-panel WES report** (with `--plot-type clinical`)
+- `<sample>_coverage_breadth_qc.html`: **QC metric** (with `--plot-type qc-breadth`)
+- `<sample>_chromosome_report.txt`: Human-readable text report with interpretations
+- `<sample>_chromosome_summary.tsv`: Tab-delimited coverage statistics with normalized ratios
 - `<sample>_covered_regions.tsv`: Genomic coordinates of all covered regions
 - `chromosome_comparison.html`: Multi-sample comparison (when multiple BAMs provided)
 - `chromosome_heatmap.html`: Coverage heatmap across samples
 
-**Single Sample Example (Default - Fast!):**
+**Quick Start (Recommended Default):**
 ```bash
-# Generates optimized log-scaled tracks only (1 HTML file)
-exscope chromosome-coverage patient.bam -d chr_analysis/
+# Generates scientifically validated normalized depth ratio plot
+exscope chromosome-coverage wes_sample.bam -d chr_analysis/
+# Output: 1 HTML file showing chromosome/autosomal mean ratios
+```
+
+**Comprehensive Clinical Report:**
+```bash
+# Two-panel visualization: ratio (clinical) + depth (QC)
+exscope chromosome-coverage wes_sample.bam -d analysis/ --plot-type clinical
+# Perfect for clinical CNV detection in WES data
 ```
 
 **All Visualizations:**
 ```bash
-# Generate all plot types with --all-plots flag
-exscope chromosome-coverage patient.bam -d analysis/ --all-plots
-# Output: 3 HTML files (tracks + bar chart + report)
+# Generate all plot types for thorough analysis
+exscope chromosome-coverage wes_sample.bam -d analysis/ --all-plots
+# Output: 4 HTML files (ratio + clinical + bar chart + QC breadth)
 ```
 
 **Publication-Ready Figures (High-Resolution PDF/PNG):**
 ```bash
-# Generate PNG and PDF at 300 DPI for publications
-exscope chromosome-coverage patient.bam -d figures/ \
+# Generate clinical report in multiple formats at 300 DPI
+exscope chromosome-coverage wes_sample.bam -d figures/ \
+  --plot-type clinical \
   --export-format html png pdf \
   --dpi 300 \
   --width 1600 \
-  --height 900
+  --height 1200
 # Output: Interactive HTML + publication-ready PNG + PDF
-```
-
-**All Plots + Multiple Formats:**
-```bash
-# Maximum output: all plot types in multiple formats
-exscope chromosome-coverage patient.bam -d complete/ \
-  --all-plots \
-  --export-format html png pdf \
-  --dpi 300
-# Output: 9 files total (3 plots × 3 formats)
 ```
 
 **Multi-Sample Comparison:**
@@ -234,58 +239,108 @@ exscope chromosome-coverage patient.bam -d complete/ \
 exscope chromosome-coverage --bams normal.bam patient.bam -d comparison/
 ```
 
-**Targeted Sequencing / WES Data:**
-```bash
-# Perfect for targeted sequencing - log scaling makes tiny coverages visible!
-# Example: BRCA1 gene (0.15% of chr17) clearly visible
-exscope chromosome-coverage targeted_seq.bam -d targeted_results/
-```
+**Use Case: Aneuploidy and CNV Detection in WES**
 
-**Use Case: Y Chromosome Deletion Detection**
-
-ExScope automatically detects Y chromosome deletions in WES data:
+ExScope uses normalized depth ratios to detect chromosomal abnormalities in WES data:
 
 ```bash
-exscope chromosome-coverage sample.bam -d y_deletion_check/
+exscope chromosome-coverage wes_sample.bam -d cnv_analysis/
 ```
 
 The tool will:
-1. Calculate coverage for all chromosomes (chr1-22, X, Y, MT) using pileup analysis
-2. Track actual genomic regions with coverage (merged within 1000bp gaps)
-3. Normalize coverage to autosomal mean
-4. Flag chromosomes with <15% expected coverage as deleted
+1. Calculate mean depth for all chromosomes (chr1-22, X, Y, MT) using pileup analysis
+2. Compute autosomal mean depth (chr1-22 only, excluding X/Y/MT)
+3. Calculate normalized ratio = (chromosome depth) / (autosomal mean depth)
+4. Apply biological interpretation based on clinically validated thresholds
 5. Infer sex chromosome karyotype (XX, XY, X0, XXY, XYY, XXX)
-6. Generate genome browser-style visualizations showing covered vs uncovered regions
-7. Create interactive plots and detailed reports
+6. Flag potential deletions, duplications, and aneuploidies
+7. Generate interactive plots with reference lines and clinical interpretations
 
-**Visualization Features (Optimized!):**
-- **Log-Scaled Tracks** (NEW!): Revolutionary visualization using logarithmic transformation
-  - Makes **0.01% coverage visible** (even single genes on whole chromosomes!)
-  - 400x faster rendering (0.03s vs minutes with old method)
-  - Perfect for WES/targeted sequencing where only 1-3% of chromosome is covered
-  - Bulk shape operations instead of thousands of individual traces
-- **Percentage-Based Fills**: Each chromosome shown as a horizontal bar with filled percentage
-- **Expected WES Baselines**: Dotted lines show expected exon coverage per chromosome (1-3%)
-- **Color Coding**: Normal (green), Reduced (orange), Deleted (red), Elevated (blue), Partial (purple), Not Sequenced (gray)
-- **Interactive HTML**: Hover tooltips showing both actual and log-scaled percentages
-- **Smart Transformation**: Preserves ordering while enhancing visibility of small values
+**Visualization Features (Scientifically Validated!):**
+- **Normalized Depth Ratio** (NEW DEFAULT!): Clinically validated metric for CNV detection
+  - **Ratio = 1.0**: Normal diploid (2 copies) - GREEN
+  - **Ratio = 0.5**: Haploid (1 copy, normal for chrX/Y in males) - YELLOW/ORANGE
+  - **Ratio = 1.5**: Trisomy (3 copies) - ORANGE
+  - **Ratio < 0.3**: Complete deletion (nullisomy) - RED
+  - **Ratio > 1.6**: Tetrasomy or higher - RED
+  - **Reference lines** at 1.0 (diploid), 0.5 (haploid), 1.5 (trisomy)
+  - **Works equally for WES, WGS, targeted panels** (sequencing-agnostic metric)
+  
+- **Two-Panel Clinical Report** (Comprehensive WES analysis):
+  - **Top panel**: Normalized ratios for clinical interpretation (CNV detection)
+  - **Bottom panel**: Absolute coverage depth for data quality assessment
+  - **Clear separation** between clinical signal and QC metrics
+  - **Comprehensive title** with karyotype, autosomal mean, and flagged deletions
+  
+- **Coverage Breadth QC** (Data quality only, NOT clinical):
+  - Shows (actual % covered) / (expected % for chromosome in WES)
+  - **Green** (≥80% of expected): Good WES coverage
+  - **Orange** (50-80%): Partial WES coverage
+  - **Red** (<50%): Poor WES coverage for this chromosome
+  - **Warning**: This is a QC metric, NOT suitable for clinical CNV detection
+  
+- **Interactive HTML**: Hover tooltips showing:
+  - Chromosome name and length
+  - Actual mean depth (e.g., "152.3x")
+  - Normalized ratio (e.g., "1.02")
+  - Biological interpretation (e.g., "Normal diploid")
+  - Status and covered bases
+  - **Always shows real numbers** - no hidden transformations
 
 **Karyotype Inference:**
-ExScope automatically infers karyotype from sex chromosome coverage ratios:
+ExScope automatically infers karyotype from sex chromosome normalized ratios:
 - **XX** (Normal female): chrX ratio ~1.0, chrY ratio <0.15
 - **XY** (Normal male): chrX ratio ~0.5, chrY ratio ~0.5
 - **X0** (Turner syndrome): chrX ratio ~0.5, chrY ratio <0.15
 - **XXY** (Klinefelter): chrX ratio ~1.0, chrY ratio ~0.5
 - **XYY** syndrome: chrX ratio ~0.5, chrY ratio ~1.0
 - **XXX** (Triple X): chrX ratio ~1.0, chrY ratio <0.15
-- **Unknown**: When ratios don't match expected patterns (e.g., targeted sequencing without X/Y coverage)
+- **Unknown**: When ratios don't match expected patterns
 
-**Interpretation:**
-- **Normal ratio** (~1.0 for autosomes): Chromosome present with expected copy number
-- **Reduced ratio** (0.4-0.6 for X/Y in males): Expected for sex chromosomes  
-- **Deleted** (<0.15): Chromosome likely absent or severely underrepresented
-- **Elevated** (>1.45): Possible duplication or trisomy
-- **Partially Sequenced** (<50% coverage): Targeted sequencing (e.g., exome) with incomplete chromosome coverage
+**Clinical Interpretation Guide:**
+
+**Autosomal Chromosomes (chr1-22):**
+- **Ratio 0.9-1.1** (Normal diploid): Expected for normal samples
+- **Ratio 0.4-0.6** (Hemizygous deletion): One copy lost
+- **Ratio < 0.3** (Homozygous deletion): Both copies lost (rare, lethal for most chromosomes)
+- **Ratio 1.4-1.6** (Trisomy): Three copies present (e.g., Down syndrome = chr21 ratio ~1.5)
+- **Ratio > 1.6** (Tetrasomy or higher): Four or more copies (very rare)
+
+**Sex Chromosomes (chrX, chrY):**
+- **Male (XY karyotype)**:
+  - chrX ratio ~0.5 (one copy, normal)
+  - chrY ratio ~0.5 (one copy, normal)
+  
+- **Female (XX karyotype)**:
+  - chrX ratio ~1.0 (two copies, normal)
+  - chrY ratio ~0.0 (absent, normal)
+  
+- **Turner syndrome (X0)**:
+  - chrX ratio ~0.5 (one copy instead of two)
+  - chrY ratio ~0.0 (absent)
+  
+- **Klinefelter syndrome (XXY)**:
+  - chrX ratio ~1.0 (two copies in male)
+  - chrY ratio ~0.5 (one copy)
+
+**Why Normalized Depth Ratios?**
+
+The normalized depth ratio approach is the clinical standard for CNV detection because:
+
+1. **Sequencing-agnostic**: Works equally for WES, WGS, targeted panels
+2. **Biologically meaningful**: Ratio directly reflects copy number
+3. **No arbitrary transformations**: Visual representation matches biological reality
+4. **Clinically validated**: Aligns with ACMG/CAP guidelines for CNV interpretation
+5. **Reference values have meaning**: 1.0 = diploid, 0.5 = haploid, 1.5 = trisomy
+6. **Hover tooltips show actual values**: Never hides real numbers from clinicians
+7. **WES-specific**: Designed for whole-exome sequencing where only ~2% of genome is covered
+
+**Previous Approach (DEPRECATED):**
+The legacy `plot_chromosome_tracks()` method used log transformation with an arbitrary scale factor, which:
+- Created false visual equivalences (0.15% actual coverage displayed as ~30% visual width)
+- Conflated WES target regions with biological deletions
+- Mixed QC metrics (breadth) with clinical signals (depth)
+- Not suitable for clinical CNV detection
 
 ### Global Options
 

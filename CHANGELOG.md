@@ -5,6 +5,173 @@ All notable changes to ExScope will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2024-12-01
+
+### 🔬 MAJOR: Scientifically Validated Visualizations for WES
+
+This release completely overhauls chromosome coverage visualization to use **normalized depth ratios** - the clinical standard for CNV detection. The previous log-transformation approach has been deprecated due to scientific validity concerns.
+
+### Added
+
+- **`plot_normalized_depth_ratio()`** - NEW PRIMARY visualization method:
+  - Y-axis: Normalized ratio = (chromosome mean depth) / (autosomal mean depth)
+  - Reference lines at 1.0 (diploid), 0.5 (haploid), 1.5 (trisomy)
+  - Biological interpretation-based colors:
+    - Green (#2ecc71): 0.9-1.1 (normal diploid)
+    - Yellow/Orange (#f39c12): 0.4-0.6 (haploid, normal for chrX/Y in males)
+    - Orange (#e67e22): 0.7-0.9 or 1.1-1.3 (partial loss/gain)
+    - Red (#e74c3c): <0.3 or >1.4 (deletion/duplication)
+    - Gray (#95a5a6): 0.0 (not sequenced)
+  - Hover tooltips show actual depth, ratio, and biological interpretation
+  - Clinically validated metric suitable for CNV detection
+
+- **`plot_clinical_report()`** - Comprehensive two-panel WES report:
+  - **Top panel**: Normalized depth ratios (clinical signal for CNV detection)
+  - **Bottom panel**: Absolute coverage depth (data quality assessment)
+  - Both panels share X-axis (chromosomes 1-22, X, Y, MT)
+  - Reference lines on both panels (ratios: 1.0/0.5/1.5, depth: autosomal mean)
+  - Comprehensive title showing karyotype, autosomal mean, and flagged deletions
+  - Height = 1.5x normal to accommodate two panels
+  - Clear separation of clinical interpretation from QC metrics
+
+- **`plot_coverage_breadth_qc()`** - QC metric visualization:
+  - Shows (actual % covered) / (expected % for chromosome in WES)
+  - Renamed from deprecated `plot_chromosome_tracks()`
+  - Clearly labeled as "QC metric - breadth of coverage"
+  - **NOT suitable for clinical CNV detection** (warning in title)
+  - Color scheme: green (≥80%), orange (50-80%), red (<50%)
+  - Useful for assessing WES data quality only
+
+- **Helper functions for biological interpretation**:
+  - `get_ratio_color(ratio)`: Returns color based on biological significance
+  - `get_ratio_interpretation(ratio, chrom, karyotype)`: Returns clinical interpretation text
+    - Context-aware (knows chrY in males should be 0.5)
+    - Returns strings like "Normal diploid", "Hemizygous deletion", "Trisomy (3 copies)"
+
+- **CLI: `--plot-type` argument** for chromosome-coverage command:
+  - `--plot-type ratio` (DEFAULT): Normalized depth ratio (RECOMMENDED)
+  - `--plot-type clinical`: Two-panel clinical report
+  - `--plot-type qc-breadth`: Coverage breadth QC metric
+  - `--plot-type legacy`: DEPRECATED log-scaled visualization
+  - `--all-plots`: Generate all plot types (overrides --plot-type)
+
+- **Enhanced hover tooltips** across all visualizations:
+  - Always show actual mean depth (e.g., "152.3x")
+  - Always show normalized ratio (e.g., "1.02")
+  - Include biological interpretation (e.g., "Normal diploid")
+  - Show chromosome status and covered bases
+  - **Never hide real numbers** - transparency for clinical users
+
+- **Updated CLI examples** in help text:
+  - WES chromosome coverage analysis (default: normalized depth ratio)
+  - WES clinical report with two-panel visualization
+  - Generate all plot types for comprehensive analysis
+  - Export publication-ready figures (HTML + PNG + PDF)
+
+### Changed
+
+- **DEFAULT VISUALIZATION CHANGED** (BREAKING):
+  - Old default: `plot_chromosome_tracks()` with log transformation
+  - **New default: `plot_normalized_depth_ratio()`** with biological interpretation
+  - Reason: Log transformation created false visual equivalences and mixed QC with clinical signals
+  - Migration: Use `--plot-type legacy` to get old behavior (not recommended)
+
+- **`plot_single_sample()` completely refactored**:
+  - Y-axis changed from absolute coverage to normalized depth ratios
+  - Reference lines at 1.0 (diploid), 0.5 (haploid), 1.5 (trisomy) instead of autosomal mean
+  - Color scheme changed from status-based to biological interpretation
+  - Hover tooltips updated with ratio interpretations
+  - Y-axis title: "Normalized Coverage Ratio (Chromosome Depth / Autosomal Mean)"
+
+- **Focus on WES data**:
+  - All new visualizations optimized for whole-exome sequencing
+  - Expected coverage percentages per chromosome for WES context
+  - Clinical interpretations tailored to WES CNV detection
+  - Other sequencing types (WGS, targeted panels) not added yet
+
+- **Documentation extensively updated**:
+  - README.md rewritten with scientific rationale for normalized ratios
+  - Clinical interpretation guide added for autosomal and sex chromosomes
+  - Examples showing normal, deletion, trisomy cases
+  - Explanation of why normalized ratios are clinically validated
+  - Deprecation notice for log-transformation approach
+
+### Deprecated
+
+- **`plot_chromosome_tracks()`** (log-transformation method):
+  - Still available for backward compatibility
+  - Displays `DeprecationWarning` when called
+  - Redirects to `plot_coverage_breadth_qc()` with QC labeling
+  - Reason for deprecation:
+    - Log transformation with arbitrary scale factor (10) created false visual equivalences
+    - Example: 0.15% actual coverage displayed as ~30% visual width (misleading)
+    - Percentage-based metric conflated WES target regions with biological deletions
+    - No distinction between "sequenced 2% because WES" vs "deleted 98% of chromosome"
+    - Not suitable for clinical CNV detection
+  - **Will be removed in v2.0.0**
+
+- **`_transform_coverage_for_visibility()`** method:
+  - No longer used in primary visualizations
+  - Arbitrary log transformation removed from clinical plots
+  - Kept for legacy compatibility only
+
+### Fixed
+
+- Scientific validity of chromosome coverage visualizations
+- Separation of QC metrics (breadth) from clinical signals (depth ratios)
+- Color scheme now reflects biological interpretation, not arbitrary status codes
+- Hover tooltips always show real numbers (no hidden transformations)
+
+### Technical Details
+
+**Why Normalized Depth Ratios?**
+
+The normalized depth ratio approach is the clinical standard for CNV detection because:
+
+1. **Sequencing-agnostic**: Works equally for WES, WGS, targeted panels
+2. **Biologically meaningful**: Ratio directly reflects copy number
+3. **No arbitrary transformations**: Visual representation matches biological reality
+4. **Clinically validated**: Aligns with ACMG/CAP guidelines for CNV interpretation
+5. **Reference values have meaning**: 1.0 = diploid, 0.5 = haploid, 1.5 = trisomy
+6. **Hover tooltips show actual values**: Never hides real numbers from clinicians
+
+**Previous Approach Issues (DEPRECATED):**
+
+The legacy log transformation approach had these problems:
+- Created false visual equivalences (0.15% coverage → 30% visual width)
+- Used arbitrary scale factor (10) with no biological basis
+- Conflated WES target regions with biological deletions
+- Mixed QC metrics (breadth) with clinical signals (depth)
+- Not suitable for clinical CNV detection or publication
+
+**Migration Guide:**
+
+If you were using the default chromosome-coverage command:
+```bash
+# Old behavior (v1.2.1 and earlier)
+exscope chromosome-coverage sample.bam -d output/
+# Generated: sample_chromosome_tracks.html (log-scaled)
+
+# New behavior (v1.3.0+)
+exscope chromosome-coverage sample.bam -d output/
+# Generates: sample_normalized_ratio.html (clinically validated)
+
+# To get old behavior (not recommended)
+exscope chromosome-coverage sample.bam -d output/ --plot-type legacy
+```
+
+For clinical use, we recommend:
+```bash
+# Two-panel clinical report (recommended for WES)
+exscope chromosome-coverage sample.bam -d output/ --plot-type clinical
+```
+
+## [1.2.1] - 2024-11-24
+
+### Fixed
+- Added missing Plotly dependencies to requirements.txt and setup.py
+- Fixed .gitignore pattern for test output directories
+
 ## [1.2.0] - 2024-11-24
 
 ### Added
@@ -14,6 +181,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Formula: `log10(1 + percent*10) / log10(1 + 100*10) * 100` with scale factor of 10
   - Preserves ordering while dramatically enhancing visibility of small values
   - Example: 0.15% coverage (BRCA1 gene) clearly visible vs invisible with linear scaling
+  - **NOTE: This approach was deprecated in v1.3.0 due to scientific validity concerns**
 
 - **Expected WES coverage baselines** per chromosome:
   - Reference lines showing expected exon density (1-3% per chromosome)

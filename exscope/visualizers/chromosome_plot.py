@@ -56,6 +56,83 @@ class ChromosomePlotter:
         self.dpi = dpi
     
     @staticmethod
+    def get_ratio_color(ratio: float) -> str:
+        """Get color for normalized depth ratio based on biological interpretation.
+        
+        Color scheme based on clinical significance:
+        - Green: Normal diploid (0.9-1.1)
+        - Yellow: Haploid/hemizygous (0.4-0.6)
+        - Orange: Partial loss/gain (0.7-0.9, 1.1-1.3)
+        - Red: Complete deletion (<0.3) or duplication (>1.4)
+        - Gray: No coverage (0.0)
+        
+        Args:
+            ratio: Normalized coverage depth ratio
+            
+        Returns:
+            Hex color code
+        """
+        if ratio == 0.0:
+            return '#95a5a6'  # Gray - not sequenced
+        elif ratio < 0.3:
+            return '#e74c3c'  # Red - complete deletion
+        elif 0.4 <= ratio <= 0.6:
+            return '#f39c12'  # Yellow/Orange - haploid (expected for chrY in males, hemizygous deletions)
+        elif 0.7 <= ratio < 0.9:
+            return '#e67e22'  # Orange - partial loss
+        elif 0.9 <= ratio <= 1.1:
+            return '#2ecc71'  # Green - normal diploid
+        elif 1.1 < ratio <= 1.3:
+            return '#e67e22'  # Orange - partial gain
+        elif ratio > 1.4:
+            return '#e74c3c'  # Red - duplication/trisomy
+        else:  # 0.3-0.4, 0.6-0.7, 1.3-1.4
+            return '#c0392b'  # Dark red - abnormal intermediate values
+    
+    @staticmethod
+    def get_ratio_interpretation(ratio: float, chrom: str, karyotype = "Unknown") -> str:
+        """Get biological interpretation hint for a normalized depth ratio.
+        
+        Args:
+            ratio: Normalized coverage depth ratio
+            chrom: Chromosome name
+            karyotype: Inferred karyotype (e.g., "XX", "XY") - can be string or Karyotype enum
+            
+        Returns:
+            Interpretation string
+        """
+        # Handle both string and Karyotype enum
+        karyotype_str = str(karyotype.value) if hasattr(karyotype, 'value') else str(karyotype)
+        
+        is_chrY = chrom in ['chrY', 'Y']
+        is_chrX = chrom in ['chrX', 'X']
+        is_male = 'XY' in karyotype_str
+        
+        if ratio == 0.0:
+            return "Not sequenced"
+        elif ratio < 0.3:
+            return "Complete deletion (nullisomy)"
+        elif 0.4 <= ratio <= 0.6:
+            if is_chrY and is_male:
+                return "Normal (haploid Y in male)"
+            elif is_chrX and is_male:
+                return "Normal (haploid X in male)"
+            else:
+                return "Hemizygous deletion (50% loss)"
+        elif 0.7 <= ratio < 0.9:
+            return "Partial deletion (mosaic or segmental)"
+        elif 0.9 <= ratio <= 1.1:
+            return "Normal diploid"
+        elif 1.1 < ratio <= 1.3:
+            return "Partial duplication (mosaic or segmental)"
+        elif 1.4 <= ratio < 1.6:
+            return "Trisomy (3 copies)"
+        elif ratio >= 1.6:
+            return "Tetrasomy or higher (≥4 copies)"
+        else:
+            return "Abnormal - uncertain significance"
+    
+    @staticmethod
     def _transform_coverage_for_visibility(percent_covered: float, method: str = 'log') -> float:
         """Transform coverage percentage for better visibility of small values.
         
@@ -85,25 +162,29 @@ class ChromosomePlotter:
         else:  # linear
             return percent_covered
     
-    def plot_chromosome_tracks(self, result: ChromosomeAnalysisResult,
-                              output: Optional[str] = None,
-                              show_plot: bool = False,
-                              transformation: str = 'log') -> go.Figure:
-        """Create simplified chromosome coverage tracks with percentage-based fills.
+    def plot_coverage_breadth_qc(self, result: ChromosomeAnalysisResult,
+                                 output: Optional[str] = None,
+                                 show_plot: bool = False) -> go.Figure:
+        """Create coverage breadth QC visualization (secondary/quality control metric).
         
-        This visualization shows each chromosome as a horizontal bar where:
-        - Gray background = full chromosome (100%)
-        - Colored fill = percentage of chromosome covered (log-scaled for visibility)
-        - Vertical line = expected WES coverage for that chromosome
+        **WARNING**: This is a QC metric, NOT for clinical interpretation of CNVs/aneuploidies.
+        Use plot_normalized_depth_ratio() for clinical CNV detection.
         
-        Uses logarithmic transformation to make small coverages (even single genes) visible.
-        Perfect for WES/targeted sequencing to detect deletions and aneuploidies.
+        This shows the breadth of coverage (% of chromosome with any reads) normalized
+        by expected coverage for each chromosome. Useful for:
+        - Verifying target capture efficiency in WES
+        - Detecting systematic biases in library prep
+        - QC for targeted sequencing panels
+        
+        Normalized breadth = (actual % covered) / (expected % for this chromosome)
+        - Value of 1.0 = achieved expected coverage breadth
+        - Value < 0.8 = poor capture efficiency
+        - Value > 1.2 = better than expected (unusual for WES)
         
         Args:
             result: ChromosomeAnalysisResult to visualize
             output: Optional output file path (HTML or image)
             show_plot: Whether to display plot interactively
-            transformation: Transform method ('log', 'sqrt', 'linear') for visibility
             
         Returns:
             Plotly Figure object
@@ -123,14 +204,30 @@ class ChromosomePlotter:
             cov = result.chromosomes[chrom]
             y_pos = idx
             
-            # Get actual and transformed coverage percentages
+            # Get actual percentage covered
             actual_percent = cov.percent_covered
-            visual_percent = self._transform_coverage_for_visibility(actual_percent, transformation)
             
-            # Get color based on status
-            color = self.COLORS.get(cov.status, '#95a5a6')
+            # Get expected coverage for this chromosome (for WES)
+            expected_percent = self.EXPECTED_WES_COVERAGE.get(chrom, 2.0)
             
-            # Add gray background (full chromosome = 100%)
+            # Normalize: actual / expected (no arbitrary transformation)
+            if expected_percent > 0:
+                normalized_breadth = (actual_percent / expected_percent) * 100
+            else:
+                normalized_breadth = 0
+            
+            # Cap at 100% for visualization
+            visual_percent = min(normalized_breadth, 100)
+            
+            # Color based on normalized breadth (QC metric)
+            if normalized_breadth >= 80:
+                color = '#2ecc71'  # Green - good capture
+            elif normalized_breadth >= 50:
+                color = '#f39c12'  # Orange - moderate capture
+            else:
+                color = '#e74c3c'  # Red - poor capture
+            
+            # Add gray background (100% = expected coverage achieved)
             all_shapes.append(dict(
                 type="rect",
                 x0=0, x1=100,
@@ -140,7 +237,7 @@ class ChromosomePlotter:
                 layer='below'
             ))
             
-            # Add colored fill for covered percentage (transformed for visibility)
+            # Add colored fill for normalized breadth
             if visual_percent > 0:
                 all_shapes.append(dict(
                     type="rect",
@@ -151,24 +248,22 @@ class ChromosomePlotter:
                     opacity=0.8
                 ))
             
-            # Add expected WES coverage line for this chromosome
-            expected_cov = self.EXPECTED_WES_COVERAGE.get(chrom, 2.0)
-            expected_visual = self._transform_coverage_for_visibility(expected_cov, transformation)
+            # Add reference line at 100% (expected)
             all_shapes.append(dict(
                 type="line",
-                x0=expected_visual, x1=expected_visual,
+                x0=100, x1=100,
                 y0=y_pos - 0.5, y1=y_pos + 0.5,
-                line=dict(color='rgba(0,0,0,0.3)', width=1, dash='dot')
+                line=dict(color='rgba(0,0,0,0.5)', width=2, dash='solid')
             ))
             
             # Add invisible scatter trace for hover information (one point per chromosome)
             hover_text = (
                 f"<b>{chrom}</b><br>"
-                f"Actual coverage: {actual_percent:.3f}% of chromosome<br>"
-                f"Visual (log-scaled): {visual_percent:.1f}%<br>"
-                f"Expected WES: ~{expected_cov:.1f}%<br>"
+                f"<b>QC Metric - Breadth of Coverage</b><br>"
+                f"Actual: {actual_percent:.3f}% of chromosome<br>"
+                f"Expected: {expected_percent:.1f}% (WES)<br>"
+                f"Normalized: {normalized_breadth:.1f}% of expected<br>"
                 f"Mean depth: {cov.mean_coverage:.2f}x<br>"
-                f"Status: {cov.status.value}<br>"
                 f"Covered bases: {cov.covered_bases:,} / {cov.total_bases:,} bp"
             )
             
@@ -188,39 +283,22 @@ class ChromosomePlotter:
         # Add chromosome labels as y-axis tick labels
         chrom_labels = [result.chromosomes[c].chrom for c in reversed(sorted_chroms)]
         
-        # Count chromosomes by status for summary
-        status_counts = {}
-        for cov in result.chromosomes.values():
-            status = cov.status.value
-            status_counts[status] = status_counts.get(status, 0) + 1
-        
-        # Create status summary for subtitle
-        status_summary = " | ".join([f"{count} {status}" for status, count in sorted(status_counts.items())])
-        
-        # Transformation note for subtitle
-        transform_note = {
-            'log': 'Log-scaled for visibility',
-            'sqrt': 'Square-root scaled for visibility',
-            'linear': 'Linear scale'
-        }.get(transformation, 'Transformed for visibility')
-        
         # Update layout with proper margins and axis settings
         fig.update_layout(
             title=dict(
-                text=f"Chromosome Coverage Map: {result.sample_id}<br>"
-                     f"<sub>Karyotype: {result.inferred_karyotype.value} | "
-                     f"Autosomal mean: {result.autosomal_mean:.2f}x<br>"
-                     f"{status_summary}<br>"
-                     f"<i>{transform_note} | Dotted lines show expected WES coverage | Hover for actual percentages</i></sub>",
+                text=f"<b>QC Metric:</b> Coverage Breadth Analysis - {result.sample_id}<br>"
+                     f"<sub>Normalized breadth = (actual % covered) / (expected % for chromosome)<br>"
+                     f"<b>⚠️ WARNING:</b> This is a QC metric, NOT for clinical CNV/aneuploidy detection<br>"
+                     f"Use Normalized Depth Ratio plot for clinical interpretation</sub>",
                 x=0.5,
                 xanchor='center'
             ),
             xaxis=dict(
-                title="Coverage (% of chromosome, transformed for visibility)",
+                title="Normalized Breadth (% of expected coverage achieved)",
                 showgrid=True,
                 gridcolor='#f0f0f0',
                 zeroline=False,
-                range=[0, 105]  # 0-100% with small padding
+                range=[0, 110]  # 0-100% with small padding
             ),
             yaxis=dict(
                 showticklabels=True,
@@ -236,27 +314,81 @@ class ChromosomePlotter:
             width=self.width,
             plot_bgcolor='white',
             hovermode='closest',
-            margin=dict(l=80, r=40, t=140, b=80)  # Left margin for chromosome labels
+            margin=dict(l=80, r=40, t=160, b=100),
+            annotations=[
+                dict(
+                    text="<span style='color:#2ecc71'>■</span> Good (≥80%)  "
+                         "<span style='color:#f39c12'>■</span> Moderate (50-80%)  "
+                         "<span style='color:#e74c3c'>■</span> Poor (<50%)",
+                    xref="paper", yref="paper",
+                    x=0.5, y=-0.08,
+                    showarrow=False,
+                    font=dict(size=10),
+                    xanchor='center'
+                )
+            ]
         )
         
         # Save if output specified
         if output:
-            output_path = Path(output)
-            if output_path.suffix == '.html':
-                fig.write_html(str(output_path))
-            else:
-                fig.write_image(str(output_path), width=self.width, 
-                              height=self.height, scale=self.dpi/100)
+            self._save_figure(fig, output)
         
         if show_plot:
             fig.show()
         
         return fig
     
-    def plot_single_sample(self, result: ChromosomeAnalysisResult,
-                          output: Optional[str] = None,
-                          show_plot: bool = False) -> go.Figure:
-        """Create bar plot for a single sample's chromosome coverage.
+    def plot_chromosome_tracks(self, result: ChromosomeAnalysisResult,
+                              output: Optional[str] = None,
+                              show_plot: bool = False,
+                              transformation: str = 'log') -> go.Figure:
+        """DEPRECATED: Use plot_normalized_depth_ratio() for clinical analysis.
+        
+        This method is deprecated and kept only for backward compatibility.
+        It uses misleading log transformations that create false visual impressions.
+        
+        For clinical CNV/aneuploidy detection, use:
+        - plot_normalized_depth_ratio() - PRIMARY clinical visualization
+        - plot_coverage_breadth_qc() - QC metric for capture efficiency
+        
+        Args:
+            result: ChromosomeAnalysisResult to visualize
+            output: Optional output file path (HTML or image)
+            show_plot: Whether to display plot interactively
+            transformation: Transform method (deprecated parameter, ignored)
+            
+        Returns:
+            Plotly Figure object
+        """
+        import warnings
+        warnings.warn(
+            "plot_chromosome_tracks() is deprecated due to misleading log transformations. "
+            "Use plot_normalized_depth_ratio() for clinical analysis or "
+            "plot_coverage_breadth_qc() for QC metrics.",
+            DeprecationWarning,
+            stacklevel=2
+        )
+        # Redirect to the QC breadth plot
+        return self.plot_coverage_breadth_qc(result, output, show_plot)
+    
+    def plot_normalized_depth_ratio(self, result: ChromosomeAnalysisResult,
+                                    output: Optional[str] = None,
+                                    show_plot: bool = False) -> go.Figure:
+        """Create normalized depth ratio plot - the scientifically validated primary visualization.
+        
+        This visualization shows chromosome coverage normalized by autosomal mean depth:
+        - Y-axis: Normalized ratio (chromosome depth / autosomal mean)
+        - X-axis: Chromosomes (chr1-22, X, Y, M)
+        - Reference lines: 1.0 (diploid), 0.5 (haploid), 1.5 (trisomy)
+        - Color coding based on biological interpretation (not arbitrary status)
+        
+        This is the clinical standard for CNV detection and aneuploidy detection.
+        Ratio interpretation:
+        - 1.0 ± 0.1: Normal diploid (2 copies)
+        - 0.5 ± 0.1: Haploid (1 copy - normal for chrX/chrY in males, or hemizygous deletion)
+        - 0.0-0.3: Complete deletion (nullisomy)
+        - 1.5 ± 0.1: Trisomy (3 copies)
+        - >1.6: Tetrasomy or higher
         
         Args:
             result: ChromosomeAnalysisResult to visualize
@@ -268,48 +400,38 @@ class ChromosomePlotter:
         """
         # Prepare data
         chromosomes = []
-        coverages = []
         ratios = []
-        statuses = []
         colors = []
         hover_texts = []
         
-        for chrom in sorted(result.chromosomes.keys(), 
-                          key=ChromosomeAnalysisResult._sort_chromosomes):
+        sorted_chroms = sorted(result.chromosomes.keys(),
+                              key=ChromosomeAnalysisResult._sort_chromosomes)
+        
+        for chrom in sorted_chroms:
             cov = result.chromosomes[chrom]
             chromosomes.append(chrom)
-            coverages.append(cov.mean_coverage)
             ratios.append(cov.normalized_ratio)
             
-            # Create status and hover text based on chromosome state
-            statuses.append(cov.status.value)
-            colors.append(self.COLORS[cov.status])
+            # Get color based on biological interpretation of ratio
+            colors.append(self.get_ratio_color(cov.normalized_ratio))
             
-            if cov.status == ChromosomeStatus.NOT_SEQUENCED:
-                hover_text = (
-                    f"<b>{chrom}</b><br>"
-                    f"<i>Not sequenced - no data in BAM</i><br>"
-                    f"This chromosome was not included in the sequencing"
-                )
-            elif cov.status == ChromosomeStatus.PARTIAL:
-                hover_text = (
-                    f"<b>{chrom}</b><br>"
-                    f"<i>Partially sequenced ({cov.percent_covered:.1f}% of chromosome)</i><br>"
-                    f"Mean Coverage: {cov.mean_coverage:.2f}x (in sequenced regions)<br>"
-                    f"Normalized Ratio: {cov.normalized_ratio:.3f}<br>"
-                    f"Status: {cov.status.value}<br>"
-                    f"Note: Only targeted regions sequenced (e.g., WES)"
-                )
-            else:
-                hover_text = (
-                    f"<b>{chrom}</b><br>"
-                    f"Mean Coverage: {cov.mean_coverage:.2f}x<br>"
-                    f"Normalized Ratio: {cov.normalized_ratio:.3f}<br>"
-                    f"Status: {cov.status.value}<br>"
-                    f"Covered: {cov.covered_bases:,} / {cov.total_bases:,} bp<br>"
-                    f"Chromosome coverage: {cov.percent_covered:.1f}%"
-                )
+            # Get interpretation
+            interpretation = self.get_ratio_interpretation(
+                cov.normalized_ratio, 
+                chrom, 
+                result.inferred_karyotype.value
+            )
             
+            # Create detailed hover text
+            hover_text = (
+                f"<b>{chrom}</b><br>"
+                f"Normalized Ratio: {cov.normalized_ratio:.3f}<br>"
+                f"Mean Depth: {cov.mean_coverage:.2f}x<br>"
+                f"Autosomal Mean: {result.autosomal_mean:.2f}x<br>"
+                f"<b>Interpretation: {interpretation}</b><br>"
+                f"Covered Bases: {cov.covered_bases:,} / {cov.total_bases:,}<br>"
+                f"Status: {cov.status.value}"
+            )
             hover_texts.append(hover_text)
         
         # Create figure
@@ -318,48 +440,78 @@ class ChromosomePlotter:
         # Add bar chart
         fig.add_trace(go.Bar(
             x=chromosomes,
-            y=coverages,
+            y=ratios,
             marker_color=colors,
             hovertemplate='%{hovertext}<extra></extra>',
             hovertext=hover_texts,
             showlegend=False
         ))
         
-        # Add reference line at autosomal mean
+        # Add reference lines with biological meaning
         fig.add_hline(
-            y=result.autosomal_mean,
+            y=1.0,
+            line_dash="solid",
+            line_color="green",
+            line_width=2,
+            annotation_text="Diploid (2 copies)",
+            annotation_position="right",
+            annotation=dict(font_size=10, font_color="green")
+        )
+        
+        fig.add_hline(
+            y=0.5,
             line_dash="dash",
-            line_color="gray",
-            annotation_text=f"Autosomal Mean: {result.autosomal_mean:.1f}x",
-            annotation_position="right"
+            line_color="orange",
+            line_width=1.5,
+            annotation_text="Haploid (1 copy)",
+            annotation_position="right",
+            annotation=dict(font_size=10, font_color="orange")
+        )
+        
+        fig.add_hline(
+            y=1.5,
+            line_dash="dot",
+            line_color="red",
+            line_width=1.5,
+            annotation_text="Trisomy (3 copies)",
+            annotation_position="right",
+            annotation=dict(font_size=10, font_color="red")
         )
         
         # Update layout
         title_text = f"Chromosome Coverage Analysis: {result.sample_id}"
-        if result.inferred_karyotype:
-            title_text += f"<br><sub>Inferred Karyotype: {result.inferred_karyotype.value}</sub>"
+        subtitle_parts = [f"Karyotype: {result.inferred_karyotype.value}"]
+        subtitle_parts.append(f"Autosomal Mean Depth: {result.autosomal_mean:.2f}x")
         
-        # Count chromosomes by status for subtitle
-        sequenced_count = sum(1 for c in result.chromosomes.values() if c.mean_coverage > 0)
-        total_count = len(result.chromosomes)
+        if result.deletions:
+            subtitle_parts.append(f"⚠️ Deletions: {', '.join(result.deletions)}")
+        
+        subtitle = " | ".join(subtitle_parts)
         
         fig.update_layout(
-            title=title_text,
+            title=dict(
+                text=f"{title_text}<br><sub>{subtitle}</sub>",
+                x=0.5,
+                xanchor='center'
+            ),
             xaxis_title="Chromosome",
-            yaxis_title="Mean Coverage (x)",
+            yaxis_title="Normalized Coverage Ratio (Chromosome Depth / Autosomal Mean)",
             width=self.width,
             height=self.height,
             template="plotly_white",
             hovermode='x',
             font=dict(size=12),
+            yaxis=dict(
+                range=[0, max(2.0, max(ratios) * 1.1)],  # Dynamic range, minimum 0-2
+                gridcolor='#f0f0f0'
+            ),
             annotations=[
                 dict(
-                    text=f"Chromosomes sequenced: {sequenced_count}/{total_count} | "
-                         f"<span style='color:#2ecc71'>■</span> Normal  "
-                         f"<span style='color:#9b59b6'>■</span> Partial (WES)  "
-                         f"<span style='color:#f39c12'>■</span> Reduced  "
-                         f"<span style='color:#e74c3c'>■</span> Deleted  "
-                         f"<span style='color:#95a5a6'>■</span> Not Sequenced",
+                    text="<b>Ratio Interpretation:</b> "
+                         "<span style='color:#2ecc71'>■</span> Normal (0.9-1.1)  "
+                         "<span style='color:#f39c12'>■</span> Haploid (0.4-0.6)  "
+                         "<span style='color:#e67e22'>■</span> Partial Loss/Gain  "
+                         "<span style='color:#e74c3c'>■</span> Deletion (<0.3) or Duplication (>1.4)",
                     xref="paper", yref="paper",
                     x=0.5, y=-0.15,
                     showarrow=False,
@@ -369,17 +521,150 @@ class ChromosomePlotter:
             ]
         )
         
-        # Add warnings as annotations if present
-        if result.deletions:
-            warning_text = "⚠️ Deletions detected: " + ", ".join(result.deletions)
-            fig.add_annotation(
-                text=warning_text,
-                xref="paper", yref="paper",
-                x=0.5, y=1.08,
-                showarrow=False,
-                font=dict(color="red", size=14),
-                xanchor='center'
+        # Save or show
+        if output:
+            self._save_figure(fig, output)
+        
+        if show_plot:
+            fig.show()
+        
+        return fig
+    
+    def plot_single_sample(self, result: ChromosomeAnalysisResult,
+                          output: Optional[str] = None,
+                          show_plot: bool = False) -> go.Figure:
+        """Create bar plot showing normalized depth ratios (chromosome depth / autosomal mean).
+        
+        This visualization shows chromosomal copy number using normalized depth ratios,
+        which is the clinical standard for CNV and aneuploidy detection. Previously
+        showed absolute coverage values, which were less interpretable.
+        
+        Args:
+            result: ChromosomeAnalysisResult to visualize
+            output: Optional output file path (HTML or image)
+            show_plot: Whether to display plot interactively
+            
+        Returns:
+            Plotly Figure object
+        """
+        # Prepare data
+        chromosomes = []
+        ratios = []
+        colors = []
+        hover_texts = []
+        
+        for chrom in sorted(result.chromosomes.keys(), 
+                          key=ChromosomeAnalysisResult._sort_chromosomes):
+            cov = result.chromosomes[chrom]
+            chromosomes.append(chrom)
+            ratios.append(cov.normalized_ratio)
+            
+            # Use biological interpretation for colors instead of status
+            colors.append(self.get_ratio_color(cov.normalized_ratio))
+            
+            # Get biological interpretation
+            interpretation = self.get_ratio_interpretation(
+                cov.normalized_ratio,
+                chrom,
+                result.inferred_karyotype.value
             )
+            
+            # Enhanced hover text with actual values and interpretation
+            hover_text = (
+                f"<b>{chrom}</b><br>"
+                f"Normalized Ratio: {cov.normalized_ratio:.3f}<br>"
+                f"Mean Depth: {cov.mean_coverage:.2f}x<br>"
+                f"Autosomal Mean: {result.autosomal_mean:.2f}x<br>"
+                f"<b>Interpretation: {interpretation}</b><br>"
+                f"Covered Bases: {cov.covered_bases:,} / {cov.total_bases:,}<br>"
+                f"Percent Covered: {cov.percent_covered:.2f}%<br>"
+                f"Status: {cov.status.value}"
+            )
+            hover_texts.append(hover_text)
+        
+        # Create figure
+        fig = go.Figure()
+        
+        # Add bar chart
+        fig.add_trace(go.Bar(
+            x=chromosomes,
+            y=ratios,
+            marker_color=colors,
+            hovertemplate='%{hovertext}<extra></extra>',
+            hovertext=hover_texts,
+            showlegend=False
+        ))
+        
+        # Add reference lines with biological meaning
+        fig.add_hline(
+            y=1.0,
+            line_dash="solid",
+            line_color="green",
+            line_width=2,
+            annotation_text="Diploid (1.0)",
+            annotation_position="right"
+        )
+        
+        fig.add_hline(
+            y=0.5,
+            line_dash="dash",
+            line_color="orange",
+            line_width=1.5,
+            annotation_text="Haploid (0.5)",
+            annotation_position="right"
+        )
+        
+        fig.add_hline(
+            y=1.5,
+            line_dash="dot",
+            line_color="red",
+            line_width=1.5,
+            annotation_text="Trisomy (1.5)",
+            annotation_position="right"
+        )
+        
+        # Update layout
+        title_text = f"Chromosome Coverage Analysis: {result.sample_id}"
+        subtitle_parts = [f"Karyotype: {result.inferred_karyotype.value}"]
+        subtitle_parts.append(f"Autosomal Mean: {result.autosomal_mean:.2f}x")
+        
+        if result.deletions:
+            subtitle_parts.append(f"⚠️ Deletions: {', '.join(result.deletions)}")
+        
+        subtitle = " | ".join(subtitle_parts)
+        
+        fig.update_layout(
+            title=dict(
+                text=f"{title_text}<br><sub>{subtitle}</sub>",
+                x=0.5,
+                xanchor='center'
+            ),
+            xaxis_title="Chromosome",
+            yaxis_title="Normalized Coverage Ratio (Chromosome Depth / Autosomal Mean)",
+            width=self.width,
+            height=self.height,
+            template="plotly_white",
+            hovermode='x',
+            font=dict(size=12),
+            yaxis=dict(
+                range=[0, max(2.0, max(ratios) * 1.1)],
+                gridcolor='#f0f0f0'
+            ),
+            annotations=[
+                dict(
+                    text="<b>Ratio Guide:</b> "
+                         "<span style='color:#2ecc71'>■</span> Normal (0.9-1.1)  "
+                         "<span style='color:#f39c12'>■</span> Haploid (0.4-0.6)  "
+                         "<span style='color:#e67e22'>■</span> Partial Loss/Gain  "
+                         "<span style='color:#e74c3c'>■</span> Deletion/Duplication",
+                    xref="paper", yref="paper",
+                    x=0.5, y=-0.15,
+                    showarrow=False,
+                    font=dict(size=10),
+                    xanchor='center'
+                )
+            ]
+        )
         
         # Save or show
         if output:
@@ -564,6 +849,211 @@ class ChromosomePlotter:
             width=self.width,
             height=max(400, len(results) * 40),
             template="plotly_white"
+        )
+        
+        # Save or show
+        if output:
+            self._save_figure(fig, output)
+        
+        if show_plot:
+            fig.show()
+        
+        return fig
+    
+    def plot_clinical_report(self, result: ChromosomeAnalysisResult,
+                            output: Optional[str] = None,
+                            show_plot: bool = False) -> go.Figure:
+        """Create two-panel clinical report for WES data - the recommended comprehensive view.
+        
+        This creates a publication-quality clinical report with two vertically stacked panels:
+        
+        **Top Panel (Clinical Signal)**: Normalized depth ratio
+        - Primary metric for CNV/aneuploidy detection
+        - Ratio = chromosome depth / autosomal mean
+        - Reference lines at 1.0 (diploid), 0.5 (haploid), 1.5 (trisomy)
+        - Colors based on biological interpretation
+        
+        **Bottom Panel (Data Quality)**: Absolute coverage depth
+        - Shows actual sequencing depth per chromosome
+        - Helps assess data quality and coverage uniformity
+        - Reference line at autosomal mean
+        
+        Both panels share the same X-axis (chromosomes) for easy comparison.
+        Optimized for WES data interpretation.
+        
+        Args:
+            result: ChromosomeAnalysisResult to visualize
+            output: Optional output file path (HTML or image)
+            show_plot: Whether to display plot interactively
+            
+        Returns:
+            Plotly Figure object
+        """
+        # Prepare data
+        chromosomes = sorted(result.chromosomes.keys(),
+                           key=ChromosomeAnalysisResult._sort_chromosomes)
+        
+        ratios = []
+        coverages = []
+        colors_ratio = []
+        colors_coverage = []
+        hover_texts_ratio = []
+        hover_texts_coverage = []
+        
+        for chrom in chromosomes:
+            cov = result.chromosomes[chrom]
+            ratios.append(cov.normalized_ratio)
+            coverages.append(cov.mean_coverage)
+            
+            # Colors based on biological interpretation for ratio
+            colors_ratio.append(self.get_ratio_color(cov.normalized_ratio))
+            
+            # Colors for coverage based on quality (relative to autosomal mean)
+            if cov.mean_coverage >= result.autosomal_mean * 0.8:
+                colors_coverage.append('#3498db')  # Blue - good depth
+            elif cov.mean_coverage >= result.autosomal_mean * 0.5:
+                colors_coverage.append('#f39c12')  # Orange - moderate depth
+            else:
+                colors_coverage.append('#e74c3c')  # Red - low depth
+            
+            # Get interpretation
+            interpretation = self.get_ratio_interpretation(
+                cov.normalized_ratio,
+                chrom,
+                result.inferred_karyotype.value
+            )
+            
+            # Hover text for ratio panel
+            hover_texts_ratio.append(
+                f"<b>{chrom}</b><br>"
+                f"Normalized Ratio: {cov.normalized_ratio:.3f}<br>"
+                f"<b>Interpretation: {interpretation}</b><br>"
+                f"Mean Depth: {cov.mean_coverage:.2f}x<br>"
+                f"Autosomal Mean: {result.autosomal_mean:.2f}x"
+            )
+            
+            # Hover text for coverage panel
+            hover_texts_coverage.append(
+                f"<b>{chrom}</b><br>"
+                f"Mean Depth: {cov.mean_coverage:.2f}x<br>"
+                f"Autosomal Mean: {result.autosomal_mean:.2f}x<br>"
+                f"Covered Bases: {cov.covered_bases:,}<br>"
+                f"Percent Covered: {cov.percent_covered:.2f}%"
+            )
+        
+        # Create subplots
+        fig = make_subplots(
+            rows=2, cols=1,
+            subplot_titles=(
+                '<b>Clinical Signal:</b> Normalized Depth Ratio (CNV/Aneuploidy Detection)',
+                '<b>Data Quality:</b> Absolute Coverage Depth'
+            ),
+            vertical_spacing=0.12,
+            row_heights=[0.55, 0.45]
+        )
+        
+        # Top panel: Normalized ratios (clinical signal)
+        fig.add_trace(
+            go.Bar(
+                x=chromosomes,
+                y=ratios,
+                marker_color=colors_ratio,
+                name="Normalized Ratio",
+                hovertemplate='%{hovertext}<extra></extra>',
+                hovertext=hover_texts_ratio,
+                showlegend=False
+            ),
+            row=1, col=1
+        )
+        
+        # Add reference lines to ratio panel
+        fig.add_hline(
+            y=1.0, line_dash="solid", line_color="green", line_width=2,
+            annotation_text="Diploid (1.0)", annotation_position="right",
+            row=1, col=1
+        )
+        fig.add_hline(
+            y=0.5, line_dash="dash", line_color="orange", line_width=1.5,
+            annotation_text="Haploid (0.5)", annotation_position="right",
+            row=1, col=1
+        )
+        fig.add_hline(
+            y=1.5, line_dash="dot", line_color="red", line_width=1.5,
+            annotation_text="Trisomy (1.5)", annotation_position="right",
+            row=1, col=1
+        )
+        
+        # Bottom panel: Absolute coverage (data quality)
+        fig.add_trace(
+            go.Bar(
+                x=chromosomes,
+                y=coverages,
+                marker_color=colors_coverage,
+                name="Coverage Depth",
+                hovertemplate='%{hovertext}<extra></extra>',
+                hovertext=hover_texts_coverage,
+                showlegend=False
+            ),
+            row=2, col=1
+        )
+        
+        # Add reference line at autosomal mean
+        fig.add_hline(
+            y=result.autosomal_mean, line_dash="dash", line_color="gray",
+            annotation_text=f"Autosomal Mean: {result.autosomal_mean:.1f}x",
+            annotation_position="right",
+            row=2, col=1
+        )
+        
+        # Update axes
+        fig.update_xaxes(title_text="Chromosome", row=2, col=1)
+        fig.update_yaxes(
+            title_text="Normalized Ratio",
+            range=[0, max(2.0, max(ratios) * 1.1)],
+            gridcolor='#f0f0f0',
+            row=1, col=1
+        )
+        fig.update_yaxes(
+            title_text="Mean Coverage (x)",
+            gridcolor='#f0f0f0',
+            row=2, col=1
+        )
+        
+        # Update layout
+        title_parts = [f"Sample: {result.sample_id}"]
+        title_parts.append(f"Karyotype: {result.inferred_karyotype.value}")
+        title_parts.append(f"Autosomal Mean: {result.autosomal_mean:.2f}x")
+        
+        if result.deletions:
+            title_parts.append(f"⚠️ Deletions: {', '.join(result.deletions)}")
+        
+        subtitle = " | ".join(title_parts)
+        
+        fig.update_layout(
+            title=dict(
+                text=f"<b>Clinical WES Report: Chromosome Coverage Analysis</b><br>"
+                     f"<sub>{subtitle}</sub>",
+                x=0.5,
+                xanchor='center',
+                font=dict(size=16)
+            ),
+            width=self.width,
+            height=self.height * 1.5,
+            template="plotly_white",
+            hovermode='x',
+            font=dict(size=11),
+            showlegend=False,
+            annotations=[
+                dict(
+                    text="<b>Top panel:</b> Use ratios to detect CNVs/aneuploidies | "
+                         "<b>Bottom panel:</b> Verify data quality and coverage depth",
+                    xref="paper", yref="paper",
+                    x=0.5, y=-0.08,
+                    showarrow=False,
+                    font=dict(size=10),
+                    xanchor='center'
+                )
+            ]
         )
         
         # Save or show
